@@ -87,13 +87,22 @@ def exit_education(message):
 
 @bot.message_handler(func=lambda message: message.text == Command.DELETE_WORD)
 def delete_word(message):
-    with bot.retrieve_data(message.from_user.id, message.chat.id) as data:
-        print(data)
-        id_user = message.from_user.id
-        word = data['target_word']
-        datebase.delete_word(conn, id_user, word)
+    bot.send_message(message.chat.id,
+                     "Введите слово на английском для удаления, публичные слова удалять нельзя, только персональные")
+    bot.register_next_step_handler(message, del_word)
+
+
+def del_word(message):
+    english_word = message.text.lower()
+    id_user = message.from_user.id
+    res = datebase.delete_word(conn, id_user, english_word)
+    if res == True:
         count = datebase.count_word(conn, id_user)
         bot.send_message(message.chat.id, f"Ваш словарь обновлён, теперь в него входит {count} слов")
+        start_command(message)
+    else:
+        bot.send_message(message.chat.id, "Данного слова нет среди Ваших персональных слов, введите другое слово ")
+        delete_word(message)
 
 
 @bot.message_handler(func=lambda message: message.text == Command.ADD_WORD)
@@ -106,30 +115,42 @@ def add_word(message):
 def english_word_input(message):
     english_word = message.text.lower()
     id_user = message.from_user.id
-    if datebase.check_word(conn, english_word, id_user) == 1:
+    # проверка есть ли данное слово в принципе в БД
+    first_check = datebase.check_word_in_bd(conn, english_word)
+    if not first_check:
+        # такого слова нет в вообще БД (ни у одного из других пользователей в личном словаре, ни среди публичных)
+        # поэтому заносим его в БД и потом конкретно в индивидуальный словарь пользователя
         data_for_query_new_word.append(id_user)
         data_for_query_new_word.append(english_word)
         bot.send_message(message.chat.id,
-                         "Данного слова нет в общем словаре, введите теперь это слово на русском языке")
+                         "Введите теперь это слово на русском языке")
         bot.register_next_step_handler(message, russian_word_input)
-    elif datebase.check_word(conn, english_word, id_user) == 2:
-        datebase.insert_id_user_id_word(conn, id_user, english_word)
-        bot.send_message(message.chat.id,
-                         "Данное слово есть в общем словаре, добавляем его в Ваш индивидуальный словарь")
-        count = datebase.count_word(conn, id_user)
-        bot.send_message(message.chat.id, f"Ваш словарь обновлён, теперь в него входит {count} слов")
-    elif datebase.check_word(conn, english_word, id_user) == 3:
-        bot.send_message(message.chat.id, "В вашем словаре такое слово уже есть, введите другое слово")
-        add_word(message)
+    else:
+        # если слово уже есть в БД.
+        # проверяем есть ли оно уже в индивидуальном словаре пользователя
+        second_check = datebase.check_word_in_users_vocab(conn, first_check, id_user)
+        if second_check:
+            # У пользователя нет такого слова, добавляем ему
+            datebase.insert_id_user_id_word(conn, id_user, english_word)
+            count = datebase.count_word(conn, id_user)
+            bot.send_message(message.chat.id, f"Ваш словарь обновлён, теперь в него входит {count} слов")
+            bot.send_message(message.chat.id, "Продолжим обучение")
+            start_command(message)
+        else:
+            # У пользователя уже есть такое слово в словаре, оповещаем его об этом
+            bot.send_message(message.chat.id,
+                             "У Вас уже есть такое слово в индивидуальном словаре, введите другое слово")
+            add_word(message)
 
 
 def russian_word_input(message):
     russian_word = message.text.lower()
-    id_user = message.from_user.id
     data_for_query_new_word.append(russian_word)
-    datebase.insert_word(conn, data_for_query_new_word[1], data_for_query_new_word[2])
+    # заносим слово в таблицу слов
+    datebase.insert_word(conn, data_for_query_new_word[1], data_for_query_new_word[2], False)
+    # заносим слово в словарь конкретного пользователя
     datebase.insert_id_user_id_word(conn, data_for_query_new_word[0], data_for_query_new_word[1])
-    count = datebase.count_word(conn, id_user)
+    count = datebase.count_word(conn, data_for_query_new_word[0])
     bot.send_message(message.chat.id, f"Ваш словарь обновлён, теперь в него входит {count} слов")
     bot.send_message(message.chat.id, "Продолжим обучение")
 
